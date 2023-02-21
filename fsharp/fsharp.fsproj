@@ -2,11 +2,23 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>netcoreapp3.0</TargetFramework>
+    <TargetFramework>net6</TargetFramework>
+    <Platforms>AnyCPU;x64</Platforms>
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="HOASNf.fs" />
+    <Compile Include="HOASLazy.fs" />
+    <Compile Include="HOASGraph.fs" />
+    <Compile Include="IL.fs" />
+    <Compile Include="ILClosure.fs" />
+    <Compile Include="Generics.fs" />
+    <Compile Include="Expr.fs" />
     <Compile Include="Program.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Lokad.ILPack" Version="0.1.7" />
   </ItemGroup>
 
 </Project>
