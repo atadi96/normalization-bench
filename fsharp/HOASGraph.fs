@@ -1,5 +1,11 @@
 ﻿module HOASGraph
 
+let debugfn format =
+    let print str =
+        //eprintfn "%s"
+        ()
+    Printf.kprintf print format
+
 [<ReferenceEquality>]
 type Var = { v: int }
 let mutable private asht = 0
@@ -24,26 +30,22 @@ type Tm =
     | Var of int
     | App of Tm * Tm
     | Lam of Tm
+    
+type Ctx = { lookup: Var -> CtxItem }
+and CtxItem = CtxApp of (Val * Val) | CtxLam of Var * Val | CtxUnbound of int
 
-type ApVal =
-    | ApVar of Var
-    | ApAps of (Var * ApVal) list * ApVal
-    | ApLamUnbound of (Var * ApVal)
-    
-type CtxItem = CtxApp of (Val * Val) | CtxLam of Var * Val | CtxUnbound of int
-    
 let (|CtxVal|CtxUb|) = function
     | CtxApp (f,x) -> CtxVal (VApp (f,x))
     | CtxLam (x,f) -> CtxVal (VLam (x,f))
     | CtxUnbound l -> CtxUb l
-    
-type Ctx = { lookup: Var -> CtxItem }
 
 module Ctx =
     let private appendItem (x: Var) (item: CtxItem) {lookup = lookup} =
+        debugfn "HEEE [ %A; %A ]" x item
         {
             lookup = fun v ->
                 if x = v then
+                    debugfn ":LOOK %A %A" v item
                     item
                 else lookup v
         }
@@ -63,16 +65,21 @@ module Ctx =
             paramList
             |> List.map (fun (vvar,vval) ->
                 match vval with
-                | VVar appendVar -> (vvar, lookup vvar)
+                | VVar appendVar -> (vvar, lookup appendVar)
                 | VApp (af,ax) -> (vvar, CtxApp (af,ax))
                 | VLam (lx,lb) -> (vvar, CtxLam (lx,lb))
             )
         let lookupList (v: Var) =
             paramList
             |> List.tryFind (fst >> (=) v)
+            |> Option.map (fun x ->
+                debugfn "::LOOK %A" x
+                x
+            )
             |> Option.map snd
         {
             lookup = fun v ->
+                debugfn "AAAAA %A" v
                 lookupList v
                 |> Option.defaultWith (fun () -> lookup v)
         }
@@ -85,76 +92,95 @@ module Ctx =
             lookup = fun _ -> failwith ""
         }
 
-let apVal (vval: Val) (ctx: Ctx) =
-    let (|CtxApp|CtxLam|CtxUnbound|) (_ : Val): Choice<(Val * Val), (Var * Val), int> = failwith ""
+    let (|LookApp|LookLam|LookUnbound|) (ctx: Ctx, vval: Val) =
+        match vval with
+        | VVar v ->
+            match v |> ctx.lookup with
+            | CtxApp (af,ax) -> LookApp (af,ax)
+            | CtxLam (lx,lb) -> LookLam (lx,lb)
+            | CtxUnbound l -> LookUnbound l
+        | VApp (af,ax) -> LookApp (af,ax)
+        | VLam (lx,lb) -> LookLam (lx,lb)
+        
+        
+
+let rec apVal (vval: Val) (ctx: Ctx) =
+    debugfn "apVal"
+    let (|LookApp|LookLam|LookUnbound|) (v : Val) =
+        match (ctx,v) with
+        | Ctx.LookApp (af,ax) -> LookApp (af,ax)
+        | Ctx.LookLam (lx,lb) -> LookLam (lx,lb)
+        | Ctx.LookUnbound l -> LookUnbound l
 
     let rec vAps (vval: Val) (apList: Val list)=
+        debugfn "vAps"
         match vval with
-        | CtxApp (af,ax) ->
-            failwith ""
+        | LookApp (af,ax) ->
+            debugfn "vAps LookApp [ %A; %A ]" af ax
             vAps af (ax :: apList)
         | _ -> vLams vval apList []
 
     and vLams (vval: Val) (apList: Val list) (paramList: (Var * Val) list) =
+        debugfn "vLams"
         match (vval, apList) with
-        | CtxLam (lx, lb), ax :: axs ->
+        | LookLam (lx, lb), ax :: axs ->
             vLams lb axs ((lx,ax) :: paramList)
         | _ -> (vval, apList, paramList)
 
     let (core, apList, paramList) = vAps vval []
-    let ctx' = ctx |> Ctx.appendVals paramList
-    core, apList
+    debugfn "apVal: %A <> %A <> %A" core apList paramList
+    match paramList with
+    | [] ->
+        Error (core, apList)
+    | _ ->
+        let ctx' = ctx |> Ctx.appendVals paramList
+        Ok (core, apList, ctx')
 
 
-type Ctx = CtxVal of Val | CtxUnbound of int
+let rec quote l (ctx: Ctx) vval =
+    debugfn "QUOTE %A" vval
+    let (|DeepAps|UnboundAps|LookApp|LookLam|LookUnbound|) (v : Val) =
+        match apVal v ctx with
+        | Ok (core, apList, ctx') -> 
+            DeepAps (core,apList,ctx')
+        | Error (_, []) ->
+            match (ctx,v) with
+            | Ctx.LookApp x -> LookApp x
+            | Ctx.LookLam x -> LookLam x
+            | Ctx.LookUnbound x -> LookUnbound x
+        | Error (core, apList) -> UnboundAps (core, apList)
 
-let rec quote l (ctx: Var -> Ctx) vval =
-    let rec lookup f v =
-        match ctx v with
-        | CtxUnbound x -> Var (l - x - 1)
-        | CtxVal (VVar v') -> lookup f v'
-        | CtxVal ctxVal -> f ctxVal
-    let append v' vval (ctx: Var -> Ctx) = fun v ->
-        if v = v' then
-            vval
-        else ctx v
     match vval with
-    | VVar v ->
-        lookup (quote l ctx) v
-    | VApp (VLam (v,f), x) ->
-        let ctx' =
-            ctx
-            |> append v (CtxVal x)
+    | LookLam (lx,lb) ->
+        let ctx' = ctx |> Ctx.appendUnbound lx l
+        Lam (quote (l + 1) ctx' lb)
+    | LookApp (af,ax) ->
+        App (quote l ctx af, quote l ctx ax)
+    | LookUnbound x ->
+        Var (l - x - 1)
+    | DeepAps (core, apList, ctx') ->
+        let reApp =
+            apList
+            |> List.fold (fun af ax -> VApp(af,ax)) core
+        quote l ctx' reApp
+    | UnboundAps (core, apList) ->
+        apList
+        |> List.map (quote l ctx)
+        |> List.fold (fun af ax -> App (af,ax)) (quote l ctx core)
 
-        quote l ctx' f
-    | VApp (VVar v,x) ->
-        v |> lookup (fun ctxVal ->
-            printfn "%A" ctxVal
-            match ctxVal with
-            | VLam (lamV,body) -> 
-                let ctx' = ctx |> append lamV (CtxVal x)
-                quote l ctx' body
-            | _ -> quote l ctx ctxVal
-            )
-    | VApp (f,x) ->
-        App (quote l ctx f, quote l ctx x)
-    | VLam (x,body) ->
-        let ctx' =
-            ctx
-            |> append x (CtxUnbound l)
-        Lam (quote (l + 1) ctx' body)
-
-let quote0 = quote 0 (fun _ -> failwith "empty context")
+let quote0 = quote 0 Ctx.empty
 
 
 let ap = vapp
 let ap2 f x y = ap (ap f x) y
+let let' x f = vapp (vlam f) x
 
 type ApTm = ExpTm
 
 let n2  = vlam (fun s -> vlam (fun z -> ap s (ap s z)))
 let n5  = vlam (fun s -> vlam (fun z -> ap s (ap s (ap s (ap s (ap s z))))))
 let mul = vlam (fun a -> vlam (fun b -> vlam (fun s -> vlam (fun z -> ap (ap a (ap b s)) z))))
+let n4 = let' n2 (fun n2 -> ap2 mul n2 n2)
 let suc n  = vlam (fun s -> vlam (fun z -> ap s (ap2 n s z)))
 let n10    = ap2 mul n2 n5
 let n10b   = ap2 mul n5 n2

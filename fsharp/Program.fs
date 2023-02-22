@@ -77,7 +77,7 @@ let test4 () =
 open HOASGraph
 
 let test6 () =
-    printfn "%A" (quote0 (ap n2 n2))
+    printfn "%A" (quote0 n10)
 
 [<EntryPoint>]
 let main argv =
